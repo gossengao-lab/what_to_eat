@@ -50,11 +50,15 @@ export const DeepLink = {
    * 3. sankuai://waimao/search
    */
   meituanSchemes(dishName) {
+    // 对菜品名进行编码，防止特殊字符导致链接出错
     const keyword = encodeURIComponent(dishName || '');
+    
+    // 按优先级返回多个Scheme，第一个不行就试第二个
     return [
-      `meituan://search?keyword=${keyword}`,
-      `meituanwaimai://search?keyword=${keyword}`,
-      `sankuai://waimao/search?keyword=${keyword}`,
+      `imeituan://www.meituan.com/search?q=${keyword}`,      // 方案1：美团主App（最新）
+      `meituanwaimai://waimai.meituan.com/search?query=${keyword}`, // 方案2：美团外卖App
+      `meituan://search?keyword=${keyword}`,                 // 方案3：旧版协议（兼容备用）
+      `sankuai://waimao/search?keyword=${keyword}`,          // 方案4：更旧的协议（备用）
     ];
   },
 
