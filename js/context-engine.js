@@ -7,42 +7,48 @@ import { RecommendationContext } from './models.js';
 
 const LOCATION_TTL = 5 * 60 * 1000;
 const WEATHER_TTL = 30 * 60 * 1000;
-const DEFAULT_LOC = { lat: 39.9, lon: 116.4, city: '北京', district: '海淀区', fromGeo: false };
+const DEFAULT_LOC = { lat: 39.9, lon: 116.4, city: '定位获取中', district: '请授权或刷新', fromGeo: false };
 
 /** 从 OSM address 提取市/区展示名（与缓存读取共用） */
 export function parseAddress(addr = {}) {
-  const city =
-    addr.city ||
-    addr.town ||
-    addr.county ||
-    addr.municipality ||
-    addr.state_district ||
-    addr.state ||
+  // 优先从常用字段中提取城市名
+  const city = 
+    addr.city || 
+    addr.town || 
+    addr.county || 
+    addr.municipality || 
+    addr.state_district || 
+    addr.state || 
     '当前城市';
 
-  let district =
-    addr.district ||
-    addr.city_district ||
-    addr.borough ||
-    '';
+  // 尝试从多个可能的字段中提取区级名称
+  let district = 
+    addr.district || 
+    addr.city_district || 
+    addr.borough || 
+    addr.suburb || 
+    addr.township || 
+    addr.village || 
+    addr.neighbourhood || 
+    addr.hamlet || 
+    ''; // 先留空，后面判断
 
-  if (!district) {
-    district = addr.suburb || addr.township || addr.village || '';
+  // 如果解析出的 district 和 city 完全相同，则尝试用更细粒度的字段，否则 district 无意义
+  if (district === city) {
+    district = addr.neighbourhood || addr.hamlet || addr.road || '';
   }
-  if (!district) {
-    district = addr.neighbourhood || addr.hamlet || '';
-  }
+
+  // 如果经过上述步骤，district 仍然为空，则显示为“附近”
   if (!district) {
     district = '附近';
   }
 
-  if (district === city || (city && city.includes(district))) {
-    const finer = addr.suburb || addr.neighbourhood || addr.village || addr.hamlet;
-    if (finer && finer !== city) district = finer;
-    else if (district === city) district = '附近';
+  // 返回前，确保不会出现“北京·北京”这种情况
+  if (district === city) {
+    district = '附近';
   }
 
-  return normalizePlaceDisplay(city, district);
+  return { city, district };
 }
 
 /** 规范化已存储的 city/district，避免「北京·北京」等重复展示 */
