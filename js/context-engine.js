@@ -79,7 +79,9 @@ export const ContextService = {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
           const { latitude, longitude } = pos.coords;
+          console.log('【定位调试】成功获取到经纬度：', latitude, longitude); // 新增日志
           const place = await this.reverseGeocode(latitude, longitude);
+          console.log('【定位调试】逆地理编码得到地址：', place); // 新增日志
           const result = {
             lat: latitude,
             lon: longitude,
@@ -90,13 +92,27 @@ export const ContextService = {
           Storage.set(LS_KEYS.LOCATION_CACHE, { timestamp: Date.now(), data: result });
           resolve(result);
         },
-        () => {
+        (error) => { // 这是修改后的错误处理函数
+          // 1. 打印详细错误到控制台
+          console.error('【定位调试】获取地理位置失败！错误信息：', {
+            错误代码: error.code,
+            错误信息: error.message,
+            解释: error.code === 1 ? '用户拒绝了权限' : 
+                  error.code === 2 ? '位置服务不可用（请检查手机GPS和网络）' : 
+                  error.code === 3 ? '定位超时（网络慢或信号弱）' : '未知错误'
+          });
+
+          // 2. 原有的回退逻辑保持不变
           if (cache?.data) {
+            console.log('【定位调试】正在使用缓存的位置数据。');
             const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
             resolve({ ...cache.data, ...normalized });
-          } else resolve(DEFAULT_LOC);
+          } else {
+            console.log('【定位调试】无缓存，使用默认位置。');
+            resolve(DEFAULT_LOC);
+          }
         },
-        { timeout: 5000, maximumAge: 300000, enableHighAccuracy: false }
+        { timeout: 10000, maximumAge: 300000, enableHighAccuracy: true } // 调整了参数
       );
     });
   },

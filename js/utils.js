@@ -51,7 +51,7 @@ export const DeepLink = {
     // 对菜品名进行编码，防止特殊字符导致链接出错
     const keyword = encodeURIComponent(dishName || '');
     
-    // 按优先级返回多个Scheme，第一个不行就试第二个
+    // 美团主app打开搜索页面
     return [
       `imeituan://www.meituan.com/search?q=${keyword}`,      // 方案1：美团主App（最新）
     ];
@@ -64,7 +64,7 @@ export const DeepLink = {
   storeMeituan() {
     return IS_IOS
       ? 'https://apps.apple.com/cn/app/id423084029'
-      : 'https://www.meituan.com/mobile/download/';
+      : 'http://i.meituan.com/mobile/down/';
   },
   storeEleme() {
     return IS_IOS
