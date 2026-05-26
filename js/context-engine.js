@@ -65,84 +65,196 @@ export function normalizePlaceDisplay(city, district) {
 export const ContextService = {
   async fetchLocation() {
     const cache = Storage.get(LS_KEYS.LOCATION_CACHE);
+    // 1. 有效缓存检查
     if (cache?.timestamp && Date.now() - cache.timestamp < LOCATION_TTL && cache.data) {
+      console.log('【定位流程】命中有效缓存，直接使用。', cache.data);
       const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
       return { ...cache.data, ...normalized };
     }
+    console.log('【定位流程】无有效缓存，开始新定位流程。');
 
-    return new Promise((resolve) => {
+    // 2. 方案A: 尝试高精度浏览器定位 (GPS/WiFi)
+    let finalLocation = null;
+    try {
+      console.log('【定位流程】开始尝试方案A: 浏览器高精度定位');
+      const geoPos = await this._getHighAccuracyGeoLocation();
+      const place = await this.reverseGeocode(geoPos.latitude, geoPos.longitude);
+      finalLocation = {
+        lat: geoPos.latitude,
+        lon: geoPos.longitude,
+        city: place.city,
+        district: place.district,
+        fromGeo: true,
+        source: 'GPS/WiFi'
+      };
+      console.log('【定位流程】方案A成功:', finalLocation);
+    } catch (geoError) {
+      console.warn('【定位流程】方案A失败，降级到方案B。错误:', geoError.message || geoError);
+      
+      // 3. 方案B: 主IP定位API (whois.pconline.com.cn)
+      try {
+        console.log('【定位流程】开始尝试方案B: 主IP定位API');
+        const ipLocation = await this._getLocationByIP();
+        finalLocation = {
+          ...ipLocation,
+          fromGeo: false,
+          source: 'IP-Primary'
+        };
+        console.log('【定位流程】方案B成功:', finalLocation);
+      } catch (ipPrimaryError) {
+        console.warn('【定位流程】方案B失败，降级到方案C。错误:', ipPrimaryError.message);
+        
+        // 4. 方案C: 备用IP定位API (ipapi.co)
+        try {
+          console.log('【定位流程】开始尝试方案C: 备用IP定位API');
+          const ipLocationBackup = await this._getLocationByIPBackup();
+          finalLocation = {
+            ...ipLocationBackup,
+            fromGeo: false,
+            source: 'IP-Backup'
+          };
+          console.log('【定位流程】方案C成功:', finalLocation);
+        } catch (ipBackupError) {
+          console.error('【定位流程】方案C也失败，使用默认位置。错误:', ipBackupError.message);
+          // 5. 所有方案失败，使用默认值
+          finalLocation = { ...DEFAULT_LOC, source: 'Default' };
+        }
+      }
+    }
+
+    // 6. 数据后处理与存储
+    // 确保城市名不为空，如果仍为“当前城市”，尝试从更细字段提取
+    if (finalLocation.city === '当前城市' || !finalLocation.city) {
+      console.warn('【定位流程】最终城市名仍为默认值，尝试从district等信息推断。', finalLocation);
+      // 这里可以添加更复杂的推断逻辑，例如从district中提取城市名
+      if (finalLocation.district && finalLocation.district !== '附近') {
+        // 简单示例：如果district包含“市”或“区”，尝试用作city
+        if (finalLocation.district.includes('市')) {
+          finalLocation.city = finalLocation.district;
+        }
+      }
+    }
+
+    // 规范化显示并缓存
+    const normalized = normalizePlaceDisplay(finalLocation.city, finalLocation.district);
+    const resultToCache = { ...finalLocation, ...normalized };
+    
+    console.log('【定位流程】最终定位结果（缓存前）:', resultToCache);
+    Storage.set(LS_KEYS.LOCATION_CACHE, { timestamp: Date.now(), data: resultToCache });
+    
+    return resultToCache;
+  },
+
+  // --- 以下是内部辅助方法，供上方主流程调用 ---
+  _getHighAccuracyGeoLocation() {
+    return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
-        resolve(DEFAULT_LOC);
+        reject(new Error('浏览器不支持地理位置API'));
         return;
       }
-
       navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const { latitude, longitude } = pos.coords;
-          console.log('【定位调试】成功获取到经纬度：', latitude, longitude); // 新增日志
-          const place = await this.reverseGeocode(latitude, longitude);
-          console.log('【定位调试】逆地理编码得到地址：', place); // 新增日志
-          const result = {
-            lat: latitude,
-            lon: longitude,
-            city: place.city,
-            district: place.district,
-            fromGeo: true
-          };
-          Storage.set(LS_KEYS.LOCATION_CACHE, { timestamp: Date.now(), data: result });
-          resolve(result);
-        },
-        (error) => { // 这是修改后的错误处理函数
-          // 1. 打印详细错误到控制台
-          console.error('【定位调试】获取地理位置失败！错误信息：', {
-            错误代码: error.code,
-            错误信息: error.message,
-            解释: error.code === 1 ? '用户拒绝了权限' : 
-                  error.code === 2 ? '位置服务不可用（请检查手机GPS和网络）' : 
-                  error.code === 3 ? '定位超时（网络慢或信号弱）' : '未知错误'
-          });
-
-          // 2. 原有的回退逻辑保持不变
-          if (cache?.data) {
-            console.log('【定位调试】正在使用缓存的位置数据。');
-            const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
-            resolve({ ...cache.data, ...normalized });
-          } else {
-            console.log('【定位调试】无缓存，使用默认位置。');
-            resolve(DEFAULT_LOC);
-          }
-        },
-        { timeout: 10000, maximumAge: 300000, enableHighAccuracy: true } // 调整了参数
+        (pos) => resolve(pos.coords),
+        (err) => reject(err),
+        { 
+          timeout: 8000, 
+          maximumAge: 0, // 不读缓存
+          enableHighAccuracy: true 
+        }
       );
     });
   },
 
-  async reverseGeocode(lat, lon) {
+  async _getLocationByIP() {
     try {
-      // 使用免费的IP定位API（国内稳定，无需Key）
       const res = await fetch('https://whois.pconline.com.cn/ipJson.jsp?json=true');
+      if (!res.ok) throw new Error(`API响应异常: ${res.status}`);
       const text = await res.text();
-      // 该API返回的是JSONP格式，需要处理一下
       const jsonStr = text.replace(/^callback\(|\);$/g, '');
       const data = JSON.parse(jsonStr);
       
-      // +++ 新增：打印原始数据，查看究竟返回了什么 +++
-    console.log('【IP定位调试】API 原始返回数据:', data);
-
-      // 解析出省份和城市
-      const province = data.pro || data.prov || '';
-      const city = data.city || '';
-      // 如果城市为空，但省份是直辖市，则用省份作为城市
-      const finalCity = city || (['北京','天津','上海','重庆'].includes(province) ? province : '当前城市');
+      console.log('【IP定位-主API】原始数据:', data);
       
+      // 增强解析逻辑，适配多种可能字段
+      const province = data.pro || data.prov || '';
+      // 优先级：city > region > (pro如果为直辖市) > addr中的城市部分
+      let city = data.city || data.region || '';
+      
+      // 如果city仍为空，但province是直辖市，则用province
+      if (!city && ['北京','天津','上海','重庆'].includes(province)) {
+        city = province;
+      }
+      // 最后尝试从addr字段中截取
+      if (!city && data.addr) {
+        const addr = data.addr;
+        // 简单匹配“省+市”模式，例如“广东省深圳市”
+        const cityMatch = addr.match(/([^省]+省)?([^市]+市)/);
+        if (cityMatch && cityMatch[2]) {
+          city = cityMatch[2];
+        }
+      }
+      
+      const finalCity = city || '当前城市';
       return { 
+        lat: 0, // IP定位无精确坐标
+        lon: 0,
         city: finalCity, 
-        district: '附近' // IP定位无法获取区县，统一显示“附近”
+        district: '附近'
       };
-    } catch {
-      return { city: '当前城市', district: '附近' };
+    } catch (error) {
+      console.error('【IP定位-主API】失败:', error);
+      throw error; // 抛出错误，让上层处理降级
     }
+  },
+
+  async _getLocationByIPBackup() {
+    try {
+      // 备用API：ipapi.co (无需密钥，但有速率限制，适合备用)
+      const res = await fetch('https://ipapi.co/json/');
+      if (!res.ok) throw new Error(`备用API响应异常: ${res.status}`);
+      const data = await res.json();
+      
+      console.log('【IP定位-备用API】原始数据:', data);
+      
+      const city = data.city || '';
+      const region = data.region || '';
+      // 如果city为空，但region是中文且可能包含城市名，则使用region
+      const finalCity = city || (region.includes('市') ? region : '当前城市');
+      
+      return {
+        lat: data.latitude || 0,
+        lon: data.longitude || 0,
+        city: finalCity,
+        district: data.region || '附近'
+      };
+    } catch (error) {
+      console.error('【IP定位-备用API】失败:', error);
+      throw error;
+    }
+  },
+
+  async reverseGeocode(lat, lon) {
+    // 注意：此函数现在主要被GPS定位成功后的流程调用。
+    // 为保持兼容性，保留此函数，但其内部可以调用上述IP定位作为降级。
+    console.log('【逆地理编码】被调用，参数 lat:', lat, 'lon:', lon);
+    if (lat === 0 && lon === 0) {
+      // 如果传入的是IP定位的模拟坐标，则直接走IP定位逻辑
+      return this._getLocationByIP();
+    }
+    // 如果有真实坐标，这里可以集成高德/腾讯等需要密钥的精确逆地理编码服务
+    // 由于您不希望依赖密钥，此处降级到IP定位
+    console.log('【逆地理编码】有真实坐标，但未配置精确逆地理编码服务，降级到IP定位。');
+    return this._getLocationByIP();
+  },
+
+  // 确保您原有的 fetchWeather, mapWeatherCode 等其他方法保留在这里
+  async fetchWeather(lat, lon) {
+    // ... 您原有的fetchWeather方法代码保持不变
+  },
+
+  mapWeatherCode(code) {
+    // ... 您原有的mapWeatherCode方法代码保持不变
   }
+};
 
   async fetchWeather(lat, lon) {
     const cacheKey = `wte_weather_cache_${lat.toFixed(2)}_${lon.toFixed(2)}`;
