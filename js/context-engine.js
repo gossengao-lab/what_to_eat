@@ -119,15 +119,27 @@ export const ContextService = {
 
   async reverseGeocode(lat, lon) {
     try {
-      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=zh`;
-      const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
-      if (!res.ok) throw new Error('geocode fail');
-      const data = await res.json();
-      return parseAddress(data.address || {});
+      // 使用免费的IP定位API（国内稳定，无需Key）
+      const res = await fetch('https://whois.pconline.com.cn/ipJson.jsp?json=true');
+      const text = await res.text();
+      // 该API返回的是JSONP格式，需要处理一下
+      const jsonStr = text.replace(/^callback\(|\);$/g, '');
+      const data = JSON.parse(jsonStr);
+      
+      // 解析出省份和城市
+      const province = data.pro || data.prov || '';
+      const city = data.city || '';
+      // 如果城市为空，但省份是直辖市，则用省份作为城市
+      const finalCity = city || (['北京','天津','上海','重庆'].includes(province) ? province : '当前城市');
+      
+      return { 
+        city: finalCity, 
+        district: '附近' // IP定位无法获取区县，统一显示“附近”
+      };
     } catch {
       return { city: '当前城市', district: '附近' };
     }
-  },
+  }
 
   async fetchWeather(lat, lon) {
     const cacheKey = `wte_weather_cache_${lat.toFixed(2)}_${lon.toFixed(2)}`;
