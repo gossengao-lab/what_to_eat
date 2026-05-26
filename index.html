@@ -41,6 +41,25 @@
     function loadCSS(url) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = url; document.head.appendChild(l); }
     window.addEventListener('load', function () { if (!document.querySelector('link[href*="styles.css"]')) loadCSS('styles.css?v=3'); });
   </script>
+    <!-- 条件加载 vConsole 调试工具 -->
+  <script>
+    (function() {
+      // 只有当 URL 中有 debug=true 参数，或者是本地开发时，才启用调试
+      var isDebug = window.location.search.indexOf('debug=true') !== -1;
+      var isLocal = window.location.hostname === 'localhost' || 
+                    window.location.hostname === '127.0.0.1';
+      
+      if (isDebug || isLocal) {
+        var script = document.createElement('script');
+        script.src = 'https://unpkg.com/vconsole@latest/dist/vconsole.min.js';
+        script.onload = function() {
+          new VConsole();
+          console.log('🔧 [测试模式] 调试面板已启用');
+        };
+        document.head.appendChild(script);
+      }
+    })();
+  </script>
 </head>
 <body>
   <!-- 应用主容器 -->
@@ -201,5 +220,15 @@
   <div id="toast" class="toast hidden" role="alert" aria-live="polite"></div>
 
   <script type="module" src="app.js?v=3"></script>
+  <!-- 在 body 开头添加 -->
+  <div id="debug-indicator" style="display: none; background: yellow; padding: 5px; text-align: center;">
+    🧪 测试模式 | 调试信息请点击右下角绿色按钮
+  </div>
+
+  <script>
+    if (window.location.search.indexOf('debug=true') !== -1) {
+      document.getElementById('debug-indicator').style.display = 'block';
+    }
+  </script>
 </body>
 </html>
