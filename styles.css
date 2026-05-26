@@ -21,7 +21,7 @@
 
   /* 三方平台色 */
   --Color-platform-meituan: #FFD100;
-  --Color-platform-eleme: #0097FF;
+  --Color-platform-eleme: #FF6A00;
 
   /* 安全区 */
   --safe-top: env(safe-area-inset-top, 0px);
@@ -178,7 +178,7 @@ input {
 }
 
 .btn-platform--eleme:active {
-  opacity: 0.9;
+  background-color: #e55f00;
 }
 
 .btn-text {
