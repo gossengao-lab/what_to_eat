@@ -126,6 +126,9 @@ export const ContextService = {
       const jsonStr = text.replace(/^callback\(|\);$/g, '');
       const data = JSON.parse(jsonStr);
       
+      // +++ 新增：打印原始数据，查看究竟返回了什么 +++
+    console.log('【IP定位调试】API 原始返回数据:', data);
+
       // 解析出省份和城市
       const province = data.pro || data.prov || '';
       const city = data.city || '';
