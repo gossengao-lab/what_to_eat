@@ -1,134 +1,125 @@
 /**
- * 情境感知服务（含本地缓存、预加载与降级推荐）
+ * 情境感知服务（重构版 - 强制IP定位，绕过缓存）
  */
 
 import { Storage, LS_KEYS } from './storage.js';
 import { RecommendationContext } from './models.js';
 
-const LOCATION_TTL = 5 * 60 * 1000;
+// 重要：将定位缓存时间设为0，强制每次重新获取
+const LOCATION_TTL = 0; // 改为0，禁用缓存
 const WEATHER_TTL = 30 * 60 * 1000;
-const DEFAULT_LOC = { lat: 39.9, lon: 116.4, city: '定位获取中', district: '请授权或刷新', fromGeo: false };
-
-/** 从 OSM address 提取市/区展示名（与缓存读取共用） */
-export function parseAddress(addr = {}) {
-  // 优先从常用字段中提取城市名
-  const city = 
-    addr.city || 
-    addr.town || 
-    addr.county || 
-    addr.municipality || 
-    addr.state_district || 
-    addr.state || 
-    '当前城市';
-
-  // 尝试从多个可能的字段中提取区级名称
-  let district = 
-    addr.district || 
-    addr.city_district || 
-    addr.borough || 
-    addr.suburb || 
-    addr.township || 
-    addr.village || 
-    addr.neighbourhood || 
-    addr.hamlet || 
-    ''; // 先留空，后面判断
-
-  // 如果解析出的 district 和 city 完全相同，则尝试用更细粒度的字段，否则 district 无意义
-  if (district === city) {
-    district = addr.neighbourhood || addr.hamlet || addr.road || '';
-  }
-
-  // 如果经过上述步骤，district 仍然为空，则显示为“附近”
-  if (!district) {
-    district = '附近';
-  }
-
-  // 返回前，确保不会出现“北京·北京”这种情况
-  if (district === city) {
-    district = '附近';
-  }
-
-  return { city, district };
-}
-
-/** 规范化已存储的 city/district，避免「北京·北京」等重复展示 */
-export function normalizePlaceDisplay(city, district) {
-  let c = (city || '当前城市').trim();
-  let d = (district || '').trim();
-  if (d && (d === c || c.includes(d))) {
-    d = d === '附近' ? d : '';
-  }
-  if (!d) d = '附近';
-  return { city: c, district: d };
-}
+// 默认位置也改为更中性的描述
+const DEFAULT_LOC = { lat: 0, lon: 0, city: '正在定位', district: '请稍候', fromGeo: false };
 
 export const ContextService = {
   async fetchLocation() {
-    const cache = Storage.get(LS_KEYS.LOCATION_CACHE);
-    if (cache?.timestamp && Date.now() - cache.timestamp < LOCATION_TTL && cache.data) {
-      const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
-      return { ...cache.data, ...normalized };
-    }
-
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        resolve(DEFAULT_LOC);
-        return;
-      }
-
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const { latitude, longitude } = pos.coords;
-          console.log('【定位调试】成功获取到经纬度：', latitude, longitude); // 新增日志
-          const place = await this.reverseGeocode(latitude, longitude);
-          console.log('【定位调试】逆地理编码得到地址：', place); // 新增日志
-          const result = {
-            lat: latitude,
-            lon: longitude,
-            city: place.city,
-            district: place.district,
-            fromGeo: true
-          };
-          Storage.set(LS_KEYS.LOCATION_CACHE, { timestamp: Date.now(), data: result });
-          resolve(result);
-        },
-        (error) => { // 这是修改后的错误处理函数
-          // 1. 打印详细错误到控制台
-          console.error('【定位调试】获取地理位置失败！错误信息：', {
-            错误代码: error.code,
-            错误信息: error.message,
-            解释: error.code === 1 ? '用户拒绝了权限' : 
-                  error.code === 2 ? '位置服务不可用（请检查手机GPS和网络）' : 
-                  error.code === 3 ? '定位超时（网络慢或信号弱）' : '未知错误'
-          });
-
-          // 2. 原有的回退逻辑保持不变
-          if (cache?.data) {
-            console.log('【定位调试】正在使用缓存的位置数据。');
-            const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
-            resolve({ ...cache.data, ...normalized });
-          } else {
-            console.log('【定位调试】无缓存，使用默认位置。');
-            resolve(DEFAULT_LOC);
-          }
-        },
-        { timeout: 10000, maximumAge: 300000, enableHighAccuracy: true } // 调整了参数
-      );
-    });
-  },
-
-  async reverseGeocode(lat, lon) {
+    console.log('【定位-开始】全新定位流程启动，忽略一切缓存。');
+    
+    // 方案1: 首先尝试最快的IP定位（无感，无需授权）
     try {
-      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=zh`;
-      const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
-      if (!res.ok) throw new Error('geocode fail');
-      const data = await res.json();
-      return parseAddress(data.address || {});
-    } catch {
-      return { city: '当前城市', district: '附近' };
+      console.log('【定位-步骤1】尝试IP定位API...');
+      const ipLocation = await this._getLocationByIP();
+      console.log('【定位-步骤1】IP定位成功，结果:', ipLocation);
+      
+      // 立即存储结果（虽然TTL=0，但其他逻辑可能用到）
+      Storage.set(LS_KEYS.LOCATION_CACHE, { 
+        timestamp: Date.now(), 
+        data: ipLocation 
+      });
+      return ipLocation;
+      
+    } catch (ipError) {
+      console.error('【定位-步骤1】IP定位完全失败:', ipError);
+    }
+    
+    // 方案2: IP定位失败，降级到默认值
+    console.log('【定位-降级】使用默认位置。');
+    Storage.set(LS_KEYS.LOCATION_CACHE, { 
+      timestamp: Date.now(), 
+      data: DEFAULT_LOC 
+    });
+    return DEFAULT_LOC;
+  },
+
+  /**
+   * 核心IP定位方法（重构解析逻辑）
+   */
+  async _getLocationByIP() {
+    const apiUrl = 'https://whois.pconline.com.cn/ipJson.jsp?json=true';
+    console.log(`【IP定位】请求URL: ${apiUrl}`);
+    
+    try {
+      const response = await fetch(apiUrl);
+      const rawText = await response.text();
+      console.log('【IP定位】原始响应文本:', rawText);
+      
+      // 清洗JSONP格式
+      const jsonStr = rawText.replace(/^callback\(|\);$/g, '');
+      const data = JSON.parse(jsonStr);
+      console.log('【IP定位】解析后数据对象:', data);
+      
+      // 关键：打印出对象所有键，看看究竟有什么
+      console.log('【IP定位】数据对象所有键:', Object.keys(data));
+      
+      // 增强型解析 - 尝试多个常见字段
+      let city = '';
+      const possibleCityFields = ['city', 'region', 'addr', 'pro', 'prov'];
+      for (const field of possibleCityFields) {
+        if (data[field] && typeof data[field] === 'string') {
+          console.log(`【IP定位】检查字段 ${field}: ${data[field]}`);
+          // 尝试从字符串中提取城市名（通用匹配“xx市”模式）
+          const match = data[field].match(/([^省]+省)?([^市]+市)/);
+          if (match && match[2]) {
+            city = match[2];
+            console.log(`【IP定位】从字段"${field}"中提取到城市: ${city}`);
+            break;
+          }
+        }
+      }
+      
+      // 如果没提取到，但有‘addr’字段，尝试更暴力的字符串分割
+      if (!city && data.addr) {
+        const parts = data.addr.split(' ');
+        for (const part of parts) {
+          if (part.includes('市')) {
+            city = part;
+            console.log(`【IP定位】从addr分割中获取城市: ${city}`);
+            break;
+          }
+        }
+      }
+      
+      // 最终兜底
+      if (!city) {
+        console.warn('【IP定位】无法从API响应中解析出城市名，使用默认值。');
+        city = '当前城市';
+      }
+      
+      const result = {
+        lat: 0,
+        lon: 0,
+        city: city,
+        district: '附近',
+        fromGeo: false,
+        source: 'IP-API'
+      };
+      
+      console.log('【IP定位】最终返回结果:', result);
+      return result;
+      
+    } catch (error) {
+      console.error('【IP定位】请求或解析异常:', error);
+      throw new Error(`IP定位失败: ${error.message}`);
     }
   },
 
+  // 为了兼容，保留此函数但将其重定向到IP定位
+  async reverseGeocode(lat, lon) {
+    console.log('【reverseGeocode】被调用，但重定向到IP定位。');
+    return this._getLocationByIP();
+  },
+
+  // 您原有的天气函数保持不变
   async fetchWeather(lat, lon) {
     const cacheKey = `wte_weather_cache_${lat.toFixed(2)}_${lon.toFixed(2)}`;
     const cache = Storage.get(cacheKey);
@@ -161,6 +152,7 @@ export const ContextService = {
   }
 };
 
+// --- 以下为原有的上下文管理函数，保持不变 ---
 let contextPromise = null;
 let isContextFetching = false;
 
@@ -172,7 +164,6 @@ export function isContextReady(state) {
   return Boolean(state.context && !state.context.isDegraded);
 }
 
-/** 降级情境：不等待网络，立即可用于推荐 */
 export function createFallbackContext(state) {
   return new RecommendationContext({
     time: new Date(),
@@ -183,7 +174,6 @@ export function createFallbackContext(state) {
   });
 }
 
-/** 推荐用情境：就绪则用真实数据，否则降级且不阻塞 */
 export function getContextForRecommend(state) {
   if (state.context && !state.context.isDegraded) {
     return { context: state.context, degraded: false };
@@ -204,7 +194,6 @@ async function buildContext(state) {
   return { context, fromGeo: loc.fromGeo };
 }
 
-/** 构建或复用情境（去重并发请求） */
 export async function ensureContext(state) {
   if (state.context && !state.context.isDegraded) return state.context;
   if (!contextPromise) {
@@ -220,7 +209,6 @@ export async function ensureContext(state) {
   }
 }
 
-/** 初始化情境页 UI（显式刷新，非推荐阻塞路径） */
 export async function initContext(state, elements) {
   const { statusEl, narrativeEl, confirmBtn, inspireBtn } = elements;
   statusEl.textContent = '正在感知你的用餐情境…';
@@ -231,7 +219,7 @@ export async function initContext(state, elements) {
   state.context = context;
 
   statusEl.classList.remove('context-status--loading');
-  statusEl.textContent = fromGeo ? '情境已更新' : '未授权定位，已使用默认城市演示';
+  statusEl.textContent = fromGeo ? '情境已更新' : '正在通过IP获取您的位置';
   narrativeEl.textContent = context.generateNarrative(state.profile.nickname);
   confirmBtn.disabled = false;
 
@@ -242,29 +230,19 @@ export async function initContext(state, elements) {
   return { fromGeo };
 }
 
-/**
- * 页面加载后立即预取情境（不等待 idle）
- * @param {{ onReady?: (ctx: RecommendationContext, meta: { fromGeo: boolean }) => void, onFetching?: (boolean) => void }} hooks
- */
 export function prefetchContext(state, hooks = {}) {
   const { onReady, onFetching } = hooks;
-
   if (state.context && !state.context.isDegraded) {
     onReady?.(state.context, { fromGeo: true });
     return;
   }
-
   if (contextPromise) {
     onFetching?.(true);
-    contextPromise
-      .then((ctx) => onReady?.(ctx, { fromGeo: true }))
-      .catch(() => {});
+    contextPromise.then((ctx) => onReady?.(ctx, { fromGeo: true })).catch(() => {});
     return;
   }
-
   isContextFetching = true;
   onFetching?.(true);
-
   contextPromise = buildContext(state)
     .then(({ context, fromGeo }) => {
       state.context = context;
