@@ -16,7 +16,11 @@ import {
   WEATHER_MOOD_OPTIONS
 } from './js/constants.js';
 import { Clipboard, DeepLink } from './js/utils.js';
-import { initContext, prefetchContext, ensureContext } from './js/context-engine.js';
+import {
+  prefetchContext,
+  getContextForRecommend,
+  getIsContextFetching
+} from './js/context-engine.js';
 import {
   runRecommend as engineRunRecommend,
   getFoodCategories,
@@ -46,7 +50,8 @@ const state = {
   manualOverride: { tags: [] },
   selectedSkipReason: 'category_dislike',
   pendingPrefs: null,
-  activeTemplateName: null // 当前选中的热门模板名称
+  activeTemplateName: null,
+  lastRecommendDegraded: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -90,9 +95,11 @@ function hideModal(id) {
 
 /* --- 情境页 --- */
 
-/** 首屏轻量占位，不阻塞 FCP */
+/** 首屏轻量占位，不阻塞 FCP；确认按钮立即可点 */
 function showContextShell() {
-  $('context-status').textContent = ' ';
+  const statusEl = $('context-status');
+  statusEl.textContent = getIsContextFetching() ? '正在准备中…' : ' ';
+  statusEl.classList.toggle('context-status--loading', getIsContextFetching());
   $('context-narrative').textContent = '你好！准备好获取今日美食灵感了吗？';
   $('btn-confirm-context').disabled = false;
   if (Storage.get(LS_KEYS.ONBOARDING)) {
@@ -100,12 +107,38 @@ function showContextShell() {
   }
 }
 
-async function loadContextUI() {
-  return initContext(state, {
-    statusEl: $('context-status'),
-    narrativeEl: $('context-narrative'),
-    confirmBtn: $('btn-confirm-context'),
-    inspireBtn: $('btn-inspire-again')
+function setContextPreloadUI(fetching) {
+  const statusEl = $('context-status');
+  if (state.view !== 'context') return;
+  statusEl.classList.toggle('context-status--loading', fetching);
+  if (fetching) {
+    statusEl.textContent = '正在准备中…';
+  } else if (state.context && !state.context.isDegraded) {
+    statusEl.textContent = '情境已就绪';
+    $('context-narrative').textContent = state.context.generateNarrative(state.profile.nickname);
+  } else {
+    statusEl.textContent = ' ';
+  }
+}
+
+function onContextPrefetched(context, meta = {}) {
+  if (!context || context.isDegraded) return;
+  if (state.view === 'context') {
+    const statusEl = $('context-status');
+    statusEl.classList.remove('context-status--loading');
+    statusEl.textContent = meta.fromGeo ? '情境已就绪' : '未授权定位，已使用默认城市演示';
+    $('context-narrative').textContent = context.generateNarrative(state.profile.nickname);
+  }
+  if (state.lastRecommendDegraded && state.view === 'recommendation' && state.currentResult) {
+    $('rec-reason').textContent = state.currentResult.reason;
+    state.lastRecommendDegraded = false;
+  }
+}
+
+function startContextPrefetch() {
+  prefetchContext(state, {
+    onFetching: setContextPreloadUI,
+    onReady: onContextPrefetched
   });
 }
 
@@ -115,7 +148,8 @@ function applyContextOverride() {
     time: state.context.timestamp,
     weather: state.context.weather,
     location: state.context.location,
-    manualOverride: state.manualOverride
+    manualOverride: state.manualOverride,
+    isDegraded: state.context.isDegraded
   });
   $('context-narrative').textContent = state.context.generateNarrative(state.profile.nickname);
 }
@@ -123,20 +157,25 @@ function applyContextOverride() {
 /* --- 推荐流 --- */
 
 async function runRecommend() {
-  if (!state.context) {
-    await ensureContext(state);
-  }
+  const { context, degraded } = getContextForRecommend(state);
+  state.lastRecommendDegraded = degraded;
+
   const session = Storage.getSession();
   const history = Storage.getHistory();
 
-  const result = await engineRunRecommend(state, session, history);
+  const result = await engineRunRecommend({ ...state, context }, session, history);
 
   state.currentResult = result;
   session.lastRecommendedDish = result.dishName;
   Storage.saveSession(session);
 
+  let reasonText = result.reason;
+  if (degraded) {
+    reasonText += '（基于您的时间和偏好推荐，地理位置信息加载稍慢）';
+  }
+
   $('rec-dish-name').textContent = result.dishName;
-  $('rec-reason').textContent = result.reason;
+  $('rec-reason').textContent = reasonText;
   $('rec-shops').textContent = `约 ${result.estimatedShops} 家店可送`;
   $('rec-category').textContent = result.sourceCategory;
 
@@ -435,7 +474,11 @@ function savePreferences() {
   state.pendingPrefs = null;
   showToast('偏好已保存');
   showView('context');
+  showContextShell();
   applyContextOverride();
+  if (state.context && !state.context.isDegraded) {
+    onContextPrefetched(state.context, { fromGeo: true });
+  }
 }
 
 function renderContextModalChips() {
@@ -557,9 +600,6 @@ function bindEvents() {
     const btn = $('btn-confirm-context');
     btn.disabled = true;
     try {
-      if (!state.context) {
-        await loadContextUI();
-      }
       Storage.set(LS_KEYS.ONBOARDING, true);
       $('btn-inspire-again').classList.remove('hidden');
       await runRecommend();
@@ -587,7 +627,6 @@ function bindEvents() {
   $('btn-inspire-again').addEventListener('click', async () => {
     $('btn-inspire-again').disabled = true;
     try {
-      if (!state.context) await loadContextUI();
       await runRecommend();
     } finally {
       $('btn-inspire-again').disabled = false;
@@ -627,8 +666,13 @@ function bindEvents() {
 
   $('btn-back-home').addEventListener('click', () => {
     showView('context');
-    showContextShell();
-    prefetchContext(state);
+    if (state.context && !state.context.isDegraded) {
+      $('context-narrative').textContent = state.context.generateNarrative(state.profile.nickname);
+      $('context-status').textContent = '情境已就绪';
+    } else {
+      showContextShell();
+    }
+    startContextPrefetch();
   });
 
   $('btn-open-preferences').addEventListener('click', async () => {
@@ -649,6 +693,10 @@ function bindEvents() {
   $('btn-skip-preferences').addEventListener('click', () => {
     Storage.set(LS_KEYS.ONBOARDING, true);
     showView('context');
+    showContextShell();
+    if (state.context && !state.context.isDegraded) {
+      onContextPrefetched(state.context, { fromGeo: true });
+    }
   });
 
   $('btn-add-dietary').addEventListener('click', async () => {
@@ -684,8 +732,9 @@ async function init() {
   } else {
     showView('context');
     showContextShell();
-    prefetchContext(state);
   }
+
+  startContextPrefetch();
 }
 
 if (document.readyState === 'loading') {

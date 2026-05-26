@@ -1,5 +1,5 @@
 /**
- * 情境感知服务（含本地缓存）
+ * 情境感知服务（含本地缓存、预加载与降级推荐）
  */
 
 import { Storage, LS_KEYS } from './storage.js';
@@ -9,11 +9,59 @@ const LOCATION_TTL = 5 * 60 * 1000;
 const WEATHER_TTL = 30 * 60 * 1000;
 const DEFAULT_LOC = { lat: 39.9, lon: 116.4, city: '北京', district: '海淀区', fromGeo: false };
 
+/** 从 OSM address 提取市/区展示名（与缓存读取共用） */
+export function parseAddress(addr = {}) {
+  const city =
+    addr.city ||
+    addr.town ||
+    addr.county ||
+    addr.municipality ||
+    addr.state_district ||
+    addr.state ||
+    '当前城市';
+
+  let district =
+    addr.district ||
+    addr.city_district ||
+    addr.borough ||
+    '';
+
+  if (!district) {
+    district = addr.suburb || addr.township || addr.village || '';
+  }
+  if (!district) {
+    district = addr.neighbourhood || addr.hamlet || '';
+  }
+  if (!district) {
+    district = '附近';
+  }
+
+  if (district === city || (city && city.includes(district))) {
+    const finer = addr.suburb || addr.neighbourhood || addr.village || addr.hamlet;
+    if (finer && finer !== city) district = finer;
+    else if (district === city) district = '附近';
+  }
+
+  return normalizePlaceDisplay(city, district);
+}
+
+/** 规范化已存储的 city/district，避免「北京·北京」等重复展示 */
+export function normalizePlaceDisplay(city, district) {
+  let c = (city || '当前城市').trim();
+  let d = (district || '').trim();
+  if (d && (d === c || c.includes(d))) {
+    d = d === '附近' ? d : '';
+  }
+  if (!d) d = '附近';
+  return { city: c, district: d };
+}
+
 export const ContextService = {
   async fetchLocation() {
     const cache = Storage.get(LS_KEYS.LOCATION_CACHE);
-    if (cache?.timestamp && Date.now() - cache.timestamp < LOCATION_TTL) {
-      return cache.data;
+    if (cache?.timestamp && Date.now() - cache.timestamp < LOCATION_TTL && cache.data) {
+      const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
+      return { ...cache.data, ...normalized };
     }
 
     return new Promise((resolve) => {
@@ -37,8 +85,10 @@ export const ContextService = {
           resolve(result);
         },
         () => {
-          if (cache?.data) resolve(cache.data);
-          else resolve(DEFAULT_LOC);
+          if (cache?.data) {
+            const normalized = normalizePlaceDisplay(cache.data.city, cache.data.district);
+            resolve({ ...cache.data, ...normalized });
+          } else resolve(DEFAULT_LOC);
         },
         { timeout: 5000, maximumAge: 300000, enableHighAccuracy: false }
       );
@@ -51,11 +101,7 @@ export const ContextService = {
       const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
       if (!res.ok) throw new Error('geocode fail');
       const data = await res.json();
-      const addr = data.address || {};
-      return {
-        city: addr.city || addr.town || addr.county || addr.state || '当前城市',
-        district: addr.suburb || addr.district || addr.neighbourhood || '附近'
-      };
+      return parseAddress(data.address || {});
     } catch {
       return { city: '当前城市', district: '附近' };
     }
@@ -94,64 +140,119 @@ export const ContextService = {
 };
 
 let contextPromise = null;
+let isContextFetching = false;
+
+export function getIsContextFetching() {
+  return isContextFetching;
+}
+
+export function isContextReady(state) {
+  return Boolean(state.context && !state.context.isDegraded);
+}
+
+/** 降级情境：不等待网络，立即可用于推荐 */
+export function createFallbackContext(state) {
+  return new RecommendationContext({
+    time: new Date(),
+    weather: { condition: 'unknown', temperature: 20 },
+    location: { city: '正在定位中', district: '' },
+    manualOverride: state.manualOverride,
+    isDegraded: true
+  });
+}
+
+/** 推荐用情境：就绪则用真实数据，否则降级且不阻塞 */
+export function getContextForRecommend(state) {
+  if (state.context && !state.context.isDegraded) {
+    return { context: state.context, degraded: false };
+  }
+  return { context: createFallbackContext(state), degraded: true };
+}
+
+async function buildContext(state) {
+  const loc = await ContextService.fetchLocation();
+  const weather = await ContextService.fetchWeather(loc.lat, loc.lon);
+  const context = new RecommendationContext({
+    time: new Date(),
+    weather,
+    location: { city: loc.city, district: loc.district },
+    manualOverride: state.manualOverride,
+    isDegraded: false
+  });
+  return { context, fromGeo: loc.fromGeo };
+}
 
 /** 构建或复用情境（去重并发请求） */
 export async function ensureContext(state) {
-  if (state.context) return state.context;
+  if (state.context && !state.context.isDegraded) return state.context;
   if (!contextPromise) {
-    contextPromise = (async () => {
-      const loc = await ContextService.fetchLocation();
-      const weather = await ContextService.fetchWeather(loc.lat, loc.lon);
-      return new RecommendationContext({
-        time: new Date(),
-        weather,
-        location: { city: loc.city, district: loc.district },
-        manualOverride: state.manualOverride
-      });
-    })();
+    isContextFetching = true;
+    contextPromise = buildContext(state).then(({ context }) => context);
   }
   try {
     state.context = await contextPromise;
     return state.context;
   } finally {
     contextPromise = null;
+    isContextFetching = false;
   }
 }
 
-/** 初始化情境页 UI */
+/** 初始化情境页 UI（显式刷新，非推荐阻塞路径） */
 export async function initContext(state, elements) {
   const { statusEl, narrativeEl, confirmBtn, inspireBtn } = elements;
   statusEl.textContent = '正在感知你的用餐情境…';
-  confirmBtn.disabled = true;
+  statusEl.classList.add('context-status--loading');
   narrativeEl.textContent = '你好！正在为你准备专属问候…';
 
-  const loc = await ContextService.fetchLocation();
-  const weather = await ContextService.fetchWeather(loc.lat, loc.lon);
+  const { context, fromGeo } = await buildContext(state);
+  state.context = context;
 
-  state.context = new RecommendationContext({
-    time: new Date(),
-    weather,
-    location: { city: loc.city, district: loc.district },
-    manualOverride: state.manualOverride
-  });
-
-  statusEl.textContent = loc.fromGeo ? '情境已更新' : '未授权定位，已使用默认城市演示';
-  narrativeEl.textContent = state.context.generateNarrative(state.profile.nickname);
+  statusEl.classList.remove('context-status--loading');
+  statusEl.textContent = fromGeo ? '情境已更新' : '未授权定位，已使用默认城市演示';
+  narrativeEl.textContent = context.generateNarrative(state.profile.nickname);
   confirmBtn.disabled = false;
 
   if (inspireBtn && Storage.get(LS_KEYS.ONBOARDING)) {
     inspireBtn.classList.remove('hidden');
   }
 
-  return { fromGeo: loc.fromGeo };
+  return { fromGeo };
 }
 
-/** 空闲时预取情境，不阻塞首屏 */
-export function prefetchContext(state) {
-  const run = () => ensureContext(state).catch(() => {});
-  if ('requestIdleCallback' in window) {
-    requestIdleCallback(run, { timeout: 3000 });
-  } else {
-    setTimeout(run, 800);
+/**
+ * 页面加载后立即预取情境（不等待 idle）
+ * @param {{ onReady?: (ctx: RecommendationContext, meta: { fromGeo: boolean }) => void, onFetching?: (boolean) => void }} hooks
+ */
+export function prefetchContext(state, hooks = {}) {
+  const { onReady, onFetching } = hooks;
+
+  if (state.context && !state.context.isDegraded) {
+    onReady?.(state.context, { fromGeo: true });
+    return;
   }
+
+  if (contextPromise) {
+    onFetching?.(true);
+    contextPromise
+      .then((ctx) => onReady?.(ctx, { fromGeo: true }))
+      .catch(() => {});
+    return;
+  }
+
+  isContextFetching = true;
+  onFetching?.(true);
+
+  contextPromise = buildContext(state)
+    .then(({ context, fromGeo }) => {
+      state.context = context;
+      onReady?.(context, { fromGeo });
+      return context;
+    })
+    .catch(() => null)
+    .finally(() => {
+      contextPromise = null;
+      isContextFetching = false;
+      onFetching?.(false);
+    });
 }

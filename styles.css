@@ -419,6 +419,21 @@ button.tag-chip.tag-chip--active {
   margin-bottom: 12px;
 }
 
+.context-status--loading {
+  color: var(--Color-textSecondary, #888);
+  animation: context-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes context-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .context-narrative {
   color: var(--Color-textPrimary);
 }

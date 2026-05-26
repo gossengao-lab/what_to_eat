@@ -1,0 +1,18 @@
+{
+  "root": true,
+  "extends": ["html-validate:document"],
+  "elements": ["html5"],
+  "rules": {
+    "no-redundant-role": "off",
+    "aria-label-misuse": "off",
+    "unique-landmark": "off",
+    "no-inline-style": "off",
+    "no-implicit-button-type": "warn",
+    "no-trailing-whitespace": "error",
+    "void-style": "error",
+    "missing-doctype": "error",
+    "attr-quotes": "error",
+    "require-sri": "off",
+    "no-missing-references": "off"
+  }
+}

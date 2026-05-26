@@ -50,9 +50,10 @@ export class UserProfile {
 }
 
 export class RecommendationContext {
-  constructor({ time, weather, location, manualOverride = {} } = {}) {
+  constructor({ time, weather, location, manualOverride = {}, isDegraded = false } = {}) {
     this.timestamp = time instanceof Date ? time : new Date(time || Date.now());
     this.manualOverride = manualOverride;
+    this.isDegraded = Boolean(isDegraded);
     if (manualOverride.mealPeriod) {
       this.mealPeriod = manualOverride.mealPeriod;
     } else {
@@ -89,7 +90,8 @@ export class RecommendationContext {
     };
     const greeting = periodText[this.mealPeriod] || '你好';
     const nameStr = nickname ? `，${nickname}` : '';
-    const locStr = `${this.location.city}·${this.location.district}`;
+    const { city, district } = this.location;
+    const locStr = district ? `${city}·${district}` : city;
     const timeStr = `周${['日', '一', '二', '三', '四', '五', '六'][this.dayOfWeek]} ${this.timestamp.getHours()}:${String(this.timestamp.getMinutes()).padStart(2, '0')}`;
     const cond = this.getEffectiveWeatherCondition();
     let weatherDesc = '天气不错';
