@@ -20,11 +20,28 @@ export const Clipboard = {
 };
 
 const FALLBACK_DELAY_MS = 2000;
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+/** 通过隐藏 <a> 触发 Scheme，避免 Safari 将主窗口导航到自定义协议而报「网址无效」 */
+function launchScheme(schemeUrl) {
+  const link = document.createElement('a');
+  link.href = schemeUrl;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
 
 export const DeepLink = {
-  /** 美团外卖搜索（meituanwaimai 为外卖独立 App 协议） */
+  /**
+   * 美团外卖搜索。
+   * iOS 使用 imeituan（美团主 App，与 App Store 包一致）；Android 使用美团外卖独立协议。
+   */
   meituan(dishName) {
-    const q = encodeURIComponent(dishName);
+    const q = encodeURIComponent(dishName || '');
+    if (IS_IOS) {
+      return `imeituan://www.meituan.com/search?q=${q}`;
+    }
     return `meituanwaimai://waimai.meituan.com/search?query=${q}`;
   },
   /** 淘宝闪购（原饿了么）搜索 */
@@ -32,12 +49,12 @@ export const DeepLink = {
     return `eleme://search?keyword=${encodeURIComponent(dishName)}`;
   },
   storeMeituan() {
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    return IS_IOS
       ? 'https://apps.apple.com/cn/app/id423084029'
       : 'https://www.meituan.com/mobile/download/';
   },
   storeEleme() {
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    return IS_IOS
       ? 'https://apps.apple.com/cn/app/id507161324'
       : 'https://h5.ele.me/download/';
   },
@@ -82,6 +99,6 @@ export const DeepLink = {
       }
     }, fallbackDelay);
 
-    window.location.href = schemeUrl;
+    launchScheme(schemeUrl);
   }
 };

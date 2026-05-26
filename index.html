@@ -30,14 +30,16 @@
     .btn-block { width: 100%; min-width: unset; }
     .btn-text { color: var(--Color-textSecondary); padding: 8px 16px; font-size: 15px; }
     .btn-text--accent { color: #2EC4B6; }
+    .btn-secondary.btn-platform--meituan { background-color: #FFD100; color: #1A1A1A; border: none; border-radius: 12px; font-weight: 600; }
+    .btn-secondary.btn-platform--eleme { background-color: #FF6A00; color: #fff; border: none; border-radius: 12px; font-weight: 600; }
     .hidden { display: none !important; }
   </style>
   <!-- 非关键样式异步加载 -->
-  <link rel="preload" href="styles.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="styles.css"></noscript>
+  <link rel="preload" href="styles.css?v=2" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="styles.css?v=2"></noscript>
   <script>
     function loadCSS(url) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = url; document.head.appendChild(l); }
-    window.addEventListener('load', function () { if (!document.querySelector('link[href="styles.css"]')) loadCSS('styles.css'); });
+    window.addEventListener('load', function () { if (!document.querySelector('link[href*="styles.css"]')) loadCSS('styles.css?v=2'); });
   </script>
 </head>
 <body>
@@ -198,6 +200,6 @@
   <!-- 全局 Toast -->
   <div id="toast" class="toast hidden" role="alert" aria-live="polite"></div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>

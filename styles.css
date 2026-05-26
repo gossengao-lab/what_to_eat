@@ -157,6 +157,8 @@ input {
   background-color: var(--Color-primaryLight);
 }
 
+/* 平台按钮需覆盖 .btn-secondary 的白底/描边，提高选择器优先级 */
+.btn-secondary.btn-platform--meituan,
 .btn-platform--meituan {
   background-color: var(--Color-platform-meituan);
   color: #1A1A1A;
@@ -165,10 +167,12 @@ input {
   font-weight: 600;
 }
 
+.btn-secondary.btn-platform--meituan:active,
 .btn-platform--meituan:active {
   background-color: #e6bc00;
 }
 
+.btn-secondary.btn-platform--eleme,
 .btn-platform--eleme {
   background-color: var(--Color-platform-eleme);
   color: #FFFFFF;
@@ -177,6 +181,7 @@ input {
   font-weight: 600;
 }
 
+.btn-secondary.btn-platform--eleme:active,
 .btn-platform--eleme:active {
   background-color: #e55f00;
 }
