@@ -46,8 +46,6 @@ export const DeepLink = {
   /**
    * 美团/美团外卖搜索协议列表（按优先级）。
    * 1. meituan://search
-   * 2. meituanwaimai://search
-   * 3. sankuai://waimao/search
    */
   meituanSchemes(dishName) {
     // 对菜品名进行编码，防止特殊字符导致链接出错
@@ -56,9 +54,6 @@ export const DeepLink = {
     // 按优先级返回多个Scheme，第一个不行就试第二个
     return [
       `imeituan://www.meituan.com/search?q=${keyword}`,      // 方案1：美团主App（最新）
-      `meituanwaimai://waimai.meituan.com/search?query=${keyword}`, // 方案2：美团外卖App
-      `meituan://search?keyword=${keyword}`,                 // 方案3：旧版协议（兼容备用）
-      `sankuai://waimao/search?keyword=${keyword}`,          // 方案4：更旧的协议（备用）
     ];
   },
 
