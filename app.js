@@ -655,7 +655,7 @@ function bindEvents() {
   $('btn-meituan').addEventListener('click', async () => {
     const name = state.currentResult?.dishName || '';
     await Clipboard.copy(name);
-    DeepLink.open(DeepLink.meituan(name), DeepLink.storeMeituan());
+    DeepLink.open(DeepLink.meituanSchemes(name), DeepLink.storeMeituan());
   });
 
   $('btn-eleme').addEventListener('click', async () => {

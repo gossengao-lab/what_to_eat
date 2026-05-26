@@ -20,6 +20,7 @@ export const Clipboard = {
 };
 
 const FALLBACK_DELAY_MS = 2000;
+const SCHEME_RETRY_INTERVAL_MS = 400;
 const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 /** 通过隐藏 <a> 触发 Scheme，避免 Safari 将主窗口导航到自定义协议而报「网址无效」 */
@@ -34,19 +35,32 @@ function launchScheme(schemeUrl) {
 
 export const DeepLink = {
   /**
-   * 美团外卖搜索。
-   * iOS 使用 imeituan（美团主 App，与 App Store 包一致）；Android 使用美团外卖独立协议。
+   * 美团外卖搜索（主协议，方案一）。
+   * @see meituanSchemes 含备用协议列表
    */
   meituan(dishName) {
-    const q = encodeURIComponent(dishName || '');
-    if (IS_IOS) {
-      return `imeituan://www.meituan.com/search?q=${q}`;
-    }
-    return `meituanwaimai://waimai.meituan.com/search?query=${q}`;
+    const keyword = encodeURIComponent(dishName || '');
+    return `meituan://search?keyword=${keyword}`;
   },
+
+  /**
+   * 美团/美团外卖搜索协议列表（按优先级）。
+   * 1. meituan://search
+   * 2. meituanwaimai://search
+   * 3. sankuai://waimao/search
+   */
+  meituanSchemes(dishName) {
+    const keyword = encodeURIComponent(dishName || '');
+    return [
+      `meituan://search?keyword=${keyword}`,
+      `meituanwaimai://search?keyword=${keyword}`,
+      `sankuai://waimao/search?keyword=${keyword}`,
+    ];
+  },
+
   /** 淘宝闪购（原饿了么）搜索 */
   eleme(dishName) {
-    return `eleme://search?keyword=${encodeURIComponent(dishName)}`;
+    return `eleme://search?keyword=${encodeURIComponent(dishName || '')}`;
   },
   storeMeituan() {
     return IS_IOS
@@ -60,18 +74,28 @@ export const DeepLink = {
   },
   /**
    * 尝试唤起 App；仅在未成功唤起时跳转应用商店。
-   * 通过 Page Visibility API 检测页面是否被置为隐藏以判断唤起成功。
+   * schemeUrl 可为单个链接或按优先级排列的协议数组。
+   * 通过 Page Visibility API 检测页面隐藏，成功唤起则取消应用商店回退。
    */
-  open(schemeUrl, fallbackUrl, { fallbackDelay = FALLBACK_DELAY_MS } = {}) {
+  open(schemeUrl, fallbackUrl, {
+    fallbackDelay = FALLBACK_DELAY_MS,
+    schemeInterval = SCHEME_RETRY_INTERVAL_MS,
+  } = {}) {
+    const schemes = (Array.isArray(schemeUrl) ? schemeUrl : [schemeUrl]).filter(Boolean);
+    if (schemes.length === 0) return;
+
     let launched = false;
-    let timer = null;
+    let fallbackTimer = null;
+    const retryTimers = [];
 
     const cleanup = () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
+      retryTimers.forEach((id) => clearTimeout(id));
+      retryTimers.length = 0;
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
       }
     };
 
@@ -92,13 +116,25 @@ export const DeepLink = {
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('pagehide', onPageHide);
 
-    timer = setTimeout(() => {
-      cleanup();
-      if (!launched && !document.hidden) {
-        window.location.href = fallbackUrl;
-      }
-    }, fallbackDelay);
+    const scheduleFallback = () => {
+      if (fallbackTimer !== null) return;
+      fallbackTimer = setTimeout(() => {
+        cleanup();
+        if (!launched && !document.hidden) {
+          window.location.href = fallbackUrl;
+        }
+      }, fallbackDelay);
+    };
 
-    launchScheme(schemeUrl);
-  }
+    launchScheme(schemes[0]);
+
+    for (let i = 1; i < schemes.length; i += 1) {
+      const id = setTimeout(() => {
+        if (!launched) launchScheme(schemes[i]);
+      }, schemeInterval * i);
+      retryTimers.push(id);
+    }
+
+    scheduleFallback();
+  },
 };
