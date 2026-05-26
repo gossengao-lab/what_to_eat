@@ -654,8 +654,14 @@ function bindEvents() {
 
   $('btn-meituan').addEventListener('click', async () => {
     const name = state.currentResult?.dishName || '';
-    await Clipboard.copy(name);
-    DeepLink.open(DeepLink.meituanSchemes(name), DeepLink.storeMeituan());
+    
+    // 方案一（推荐）：只使用最新的主Scheme，避免数组循环触发多个尝试
+    const latestScheme = `imeituan://www.meituan.com/search?q=${encodeURIComponent(name)}`;
+    DeepLink.open(latestScheme, DeepLink.storeMeituan());
+
+    // 方案二（备用）：如果您希望保留“复制菜品名到剪贴板”的功能，但避免其干扰，可以将其延迟或移除。
+    // 移除或注释掉下面这行代码，因为唤起美团后，用户通常直接在App内搜索，剪贴板不是必须的。
+    // await Clipboard.copy(name); 
   });
 
   $('btn-eleme').addEventListener('click', async () => {
